@@ -1,4 +1,4 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
-exec python3 codex-computer-control/install.py
+exec node codex-computer-control/scripts/install.js

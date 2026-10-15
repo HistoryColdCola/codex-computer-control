@@ -1,0 +1,21 @@
+{
+  "name": "codex-computer-control",
+  "version": "1.1.0",
+  "description": "JavaScript MCP coordinator with native macOS Swift and Windows C# backends",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "build:native": "node scripts/build-native.js",
+    "test": "node scripts/test.js",
+    "check:protocol": "node tests/protocol.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "3.25.76",
+    "zod-to-json-schema": "3.25.2"
+  }
+}

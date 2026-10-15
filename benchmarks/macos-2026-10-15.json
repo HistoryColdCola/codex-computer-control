@@ -1,0 +1,231 @@
+{
+  "date": "2026-10-15",
+  "platform": "macOS x64",
+  "baseline": {
+    "version": "1.0.0",
+    "native": [
+      {
+        "op": "cold_status",
+        "ms": 206
+      },
+      {
+        "op": "observe",
+        "ms": 621,
+        "bytes": 15592
+      },
+      {
+        "op": "observe",
+        "ms": 497,
+        "bytes": 15604
+      },
+      {
+        "op": "observe",
+        "ms": 490,
+        "bytes": 15592
+      },
+      {
+        "op": "observe",
+        "ms": 475,
+        "bytes": 15600
+      },
+      {
+        "op": "observe",
+        "ms": 481,
+        "bytes": 15588
+      },
+      {
+        "op": "text_fallback",
+        "ms": 2914,
+        "source": "ocr",
+        "count": 24
+      },
+      {
+        "op": "text_fallback",
+        "ms": 1489,
+        "source": "ocr",
+        "count": 24
+      },
+      {
+        "op": "text_fallback",
+        "ms": 1405,
+        "source": "ocr",
+        "count": 24
+      }
+    ],
+    "workflow_total_ms": [
+      8113
+    ]
+  },
+  "optimized": {
+    "version": "1.1.0",
+    "native": [
+      {
+        "op": "cold_status",
+        "ms": 179
+      },
+      {
+        "op": "observe",
+        "ms": 334,
+        "bytes": 25032,
+        "capture_backend": "coregraphics-memory"
+      },
+      {
+        "op": "observe",
+        "ms": 129,
+        "bytes": 25020,
+        "capture_backend": "coregraphics-memory"
+      },
+      {
+        "op": "observe",
+        "ms": 121,
+        "bytes": 25016,
+        "capture_backend": "coregraphics-memory"
+      },
+      {
+        "op": "observe",
+        "ms": 122,
+        "bytes": 25024,
+        "capture_backend": "coregraphics-memory"
+      },
+      {
+        "op": "observe",
+        "ms": 115,
+        "bytes": 25028,
+        "capture_backend": "coregraphics-memory"
+      },
+      {
+        "op": "text_fallback",
+        "ms": 3912,
+        "source": "ocr",
+        "count": 26
+      },
+      {
+        "op": "text_fallback",
+        "ms": 1587,
+        "source": "ocr",
+        "count": 26
+      },
+      {
+        "op": "text_fallback",
+        "ms": 1516,
+        "source": "ocr",
+        "count": 26
+      }
+    ],
+    "workflows": [
+      {
+        "completed": 6,
+        "requested": 6,
+        "total_ms": 766,
+        "workflow_wall_ms": 786,
+        "actions_ms": 472,
+        "capture_ms": 294,
+        "native_calls": {
+          "status": {
+            "calls": 1,
+            "ms": 30
+          },
+          "text": {
+            "calls": 5,
+            "ms": 180
+          },
+          "action": {
+            "calls": 3,
+            "ms": 277
+          },
+          "observe": {
+            "calls": 1,
+            "ms": 271
+          }
+        },
+        "ocr_ms": 0
+      },
+      {
+        "completed": 6,
+        "requested": 6,
+        "total_ms": 745,
+        "workflow_wall_ms": 760,
+        "actions_ms": 497,
+        "capture_ms": 248,
+        "native_calls": {
+          "status": {
+            "calls": 1,
+            "ms": 28
+          },
+          "text": {
+            "calls": 5,
+            "ms": 177
+          },
+          "action": {
+            "calls": 3,
+            "ms": 306
+          },
+          "observe": {
+            "calls": 1,
+            "ms": 231
+          }
+        },
+        "ocr_ms": 0
+      },
+      {
+        "completed": 6,
+        "requested": 6,
+        "total_ms": 739,
+        "workflow_wall_ms": 756,
+        "actions_ms": 460,
+        "capture_ms": 279,
+        "native_calls": {
+          "status": {
+            "calls": 1,
+            "ms": 36
+          },
+          "text": {
+            "calls": 5,
+            "ms": 178
+          },
+          "action": {
+            "calls": 3,
+            "ms": 266
+          },
+          "observe": {
+            "calls": 1,
+            "ms": 259
+          }
+        },
+        "ocr_ms": 0
+      }
+    ],
+    "semantic": {
+      "completed": 5,
+      "requested": 5,
+      "total_ms": 589,
+      "workflow_wall_ms": 722,
+      "actions_ms": 324,
+      "capture_ms": 265,
+      "native_calls": {
+        "status": {
+          "calls": 1,
+          "ms": 34
+        },
+        "action": {
+          "calls": 3,
+          "ms": 252
+        },
+        "text": {
+          "calls": 3,
+          "ms": 52
+        },
+        "observe": {
+          "calls": 1,
+          "ms": 248
+        }
+      }
+    }
+  },
+  "limits": [
+    "Local dedicated test window only",
+    "No model reasoning time or real messaging included",
+    "Small sample, not a universal latency guarantee",
+    "Windows native implementation not benchmarked on this Mac"
+  ]
+}

@@ -1,168 +1,190 @@
 # Codex Computer Control · Codex 电脑控制
 
-[English documentation](README.en.md) · [BUG 检查记录 / Bug audit](BUG_AUDIT.md)
+[English](README.en.md) · [架构](ARCHITECTURE.md) · [验证与已知限制](BUG_AUDIT.md)
 
-面向 macOS 的本机桌面操作插件。当前源码版本：**0.3.1**。
+**1.1.0：JavaScript 主控 + 平台原生后端。** Node.js 自动识别系统，通过统一 MCP 接口调度 macOS 的 Swift 或 Windows 的 C# 后端。日常运行不需要 Python，也不会把 Mac 的操作脚本直接套用在 Windows 上。
 
-通过本机 MCP，让 Codex 读取 macOS 主屏截图、点击/双击/右键、拖拽、滚动、按快捷键、输入中文，并打开桌面应用。无需额外 API 密钥，不开放网络控制端口。截图会提供给当前 Codex 模型。
+## 1.1.0：按实际耗时优化
 
-## 0.3.0：极速工作流
+同一本地六步流程从 8.113 秒降至三次中位数 0.745 秒；主屏截图中位数从 490 ms 降至 122 ms。均为本机小样本测试，排除模型推理和真实消息发送，详见 [性能记录](BENCHMARKS.md)。
 
-`desktop_step` 一次最多执行 32 个相关动作，结束后直接返回截图和执行耗时。默认只提供三个核心工具，鼓励本机脚本执行完整的确定流程。使用持久 MCP 连接，避免每次启动 Python、保存截图再读取。指定 `app` 会激活目标应用，并在动作和输入分段之间检查前台应用。
+新增控件 `element_id` 与 `invoke / set_value / focus_element` 操作。`click_text` 遇到支持原生执行的控件会直接调用，只有未提供该能力时才按坐标点击；一旦调用报错，不自动换方式重试。默认观察同时返回 AX/UIA 控件信息，不自动进入 OCR；显式 `include_text=true` 或 `output=text` 仍允许完整 OCR 回退。
 
-默认 `ultra` 使用 512 像素宽、JPEG 质量 20；`fast` 为 768 像素/质量 30，`detail` 为完整逻辑分辨率/质量 85。默认零等待，键鼠固定间隔为 5 ms，单击取消额外 120 ms 等待。macOS 15 之前优先使用 Core Graphics 内存截图，不可用时回退系统截图命令。
+Mac 14+ 在 Swift 5.9+ SDK 构建时使用 ScreenCaptureKit 单帧接口；本机 Mac 13 使用 Core Graphics 内存截图。旧 SDK / 新系统不具备相应接口时保留系统截图命令作为兼容路径。缩略图只进行一次缩放。
 
-根据缩略图定位时，在下一次 `desktop_step` 传回 `view_id`，服务会把图片坐标映射到屏幕。OCR/辅助功能 x/y 和 `crop`/`region` 永远是逻辑屏幕坐标，不应与缩略图坐标混用。局部细查用 `crop` 和 `profile="detail"`，无损全屏仍可用 `desktop_screenshot(format="png")`。
+## 分工
 
-新增 `click_text` 和 `assert_text` 动作，读取当前应用辅助功能信息，不支持时用本机 Apple Vision OCR。精确唯一匹配，可指定屏幕 `region` 和 `timeout_ms`，供脚本自行等待界面变化和验证条件。条件失败立即停下，不自动重放。`output="text"` 不返回图片，`include_text=true` 返回图文，`output="none"` 成功时跳过截图；一般失败返回画面，休眠、急停和硬超时可能只有状态。
+| 层 | 技术 | 负责内容 |
+| --- | --- | --- |
+| 统一入口 | JavaScript / Node.js | 系统识别、MCP、参数校验、动作编排、坐标换算、时间预算、错误和急停状态 |
+| macOS 后端 | Swift / AppKit / Core Graphics / Vision | 应用激活、前台和权限检查、键鼠事件、图片处理、辅助功能读取、本机 OCR |
+| Windows 后端 | C# / Win32 / UI Automation | DPI 感知、应用窗口、SendInput、屏幕捕获、控件读取 |
+| Windows 启动与 OCR 适配 | 系统自带 Windows PowerShell 5.1 / WinRT | 编译加载 C#、持久进程通信、Windows OCR 调用 |
 
-已知布局尽量只需一次观察、一次本地执行：选择联系人，断言聊天标题，输入，断言输入框草稿，发送，再断言结果。发送前必须核对聊天标题区域和草稿区域，侧栏联系人名字不能证明当前收件人。未知布局先观察，不猜测。
-
-执行放在持续复用的隔离进程中，不会每步重新启动；父进程负责硬期限。默认 `budget_ms=8000` 对应 10 秒硬期限，最大 20 秒。阻塞系统调用会终止执行进程并返回 `uncertain_action`；输入可能已生效时设置 STOP，必须人工恢复和观察，不能重发。休眠/锁定时立即拒绝输入，需要人工唤醒。模型推理和整台主机暂停运行不受脚本控制。输入采用 Apple 的 [CGEventPostToPid](https://developer.apple.com/documentation/coregraphics/cgevent/posttopid%28_%3A%29?language=objc) 投递到前台应用，避免旧 HID 通道。
-
-性能取决于机器、应用、系统权限、OCR 和模型延迟。本发布包不附带开发机器的历史测试结果，也不保证用户任务在 20 秒内完成。
+JS 是默认运行入口。原生辅助进程按需启动并复用，使用 JSON 行协议；不开放远程控制端口。Linux 返回明确的不支持错误。
 
 ## 安装
 
-需要 macOS、Python 3.10+ 和 Codex。下载或克隆仓库，在仓库根目录运行：
+两端均需要 **Node.js 22+（含 npm）和可用的 Codex CLI**。源码包第一次安装需要网络下载锁定的 npm 依赖。
+
+### macOS
+
+需要 Xcode Command Line Tools 中的 Swift 编译器；缺少时先运行 `xcode-select --install` 并完成系统安装。后端使用 macOS 10.15+ 的 API；本次本地编译环境为 Swift 5.8 / macOS 13 SDK，未验证所有系统版本。
+
+在仓库根目录运行：
 
 ```sh
-python3 codex-computer-control/install.py
+node codex-computer-control/scripts/install.js
 ```
 
-也可以双击根目录的 `install.command`。安装器会查找 PATH 中的 `codex` 及常见应用内 CLI 路径，创建独立 Python 环境，注册 `codex-computer-control-local` 本地市场并启用插件。
+也可双击 `install.command`。安装时构建本机架构的 Swift 可执行文件。辅助功能和屏幕录制权限需要用户在“系统设置 → 隐私与安全性”中手动授予实际宿主或辅助进程，编译成功不等于已经获得系统权限。
 
-安装后重启 Codex，开启新聊天。在 **系统设置 → 隐私与安全性** 中，给运行服务的 Codex/ChatGPT 或 Python 开启 **辅助功能** 和 **屏幕录制** 权限。以 macOS 实际显示的授权对象及 `desktop_status` 的结果为准。这些系统权限需要用户手动开启。
+### Windows
 
-运行环境和服务位于 `~/.local/share/codex-computer-control/`。安装后保留仓库目录；更新时需从这里重新运行安装器。`.mcp.json` 按本机路径生成，已被 Git 忽略。其他电脑需要重新运行安装脚本，本版本不支持跳过脚本直接从远程插件市场安装。
+面向 Windows 10/11 交互式桌面，使用系统自带的 **Windows PowerShell 5.1、.NET Framework 和桌面组件**。不要求另外安装 Python 或 .NET SDK。源码安装时使用系统 C# 编译能力校验后端。
+
+在仓库根目录打开终端运行同一条命令，或双击 `install.cmd`：
+
+```powershell
+node codex-computer-control/scripts/install.js
+```
+
+安装器优先查找 `codex.exe`，也支持官方 npm 全局安装的 `@openai/codex/bin/codex.js`。找不到时用 `CODEX_CLI` 指定真实可执行文件路径。Node.js 使用官方 Windows 发行版的标准 npm 布局。企业 PowerShell 策略、下载文件标记或系统缺失的组件可能阻止加载；安装器不会放宽机器级执行策略。使用 `RemoteSigned` 启动系统 PowerShell。系统原生 ARM64 Windows 未做验证。
+
+两端都在独立的个人目录安装副本，发布源码目录不会生成 `.mcp.json` 或 `node_modules`：
+
+- macOS：`~/.local/share/codex-computer-control/marketplace/`
+- Windows：`%LOCALAPPDATA%\codex-computer-control\marketplace\`
+
+安装器注册 `codex-computer-control-local` 市场，安装 `codex-computer-control@codex-computer-control-local`。更新同样运行安装器，旧副本会保存在个人目录的 `marketplace-backup-*` 中，已有 STOP 不会被自动清除。然后重启 Codex 并开启新聊天。
+
+源码尚未运行安装器时，不支持直接通过远程市场安装：本机 MCP 启动路径需要生成。仓库未指定开源许可证，发布者需要自行选择授权条款。
 
 ## 使用
 
-例如：“用 Codex 电脑控制打开计算器，计算 123 × 456，并核对结果。”
+默认仍提供三个工具：
 
-默认三个工具：`desktop_step`、`desktop_status`、`desktop_screenshot`。`desktop_step` 支持 click、move、drag、scroll、hotkey、press、type、wait、click_text、assert_text 动作。兼容旧独立工具可使用 `CODEX_COMPUTER_CONTROL_LEGACY_TOOLS=1 python3 codex-computer-control/install.py` 安装。
+| 工具 | 行为 |
+| --- | --- |
+| `desktop_status` | 系统、后端、主屏大小、前台标识、权限/可用性、急停状态 |
+| `desktop_screenshot` | 主屏原分辨率截图；`format=jpeg` 或 `png` |
+| `desktop_step` | 最多 32 个动作，一次结果；支持图像、文字或省略成功截图 |
 
-当前只支持主屏，Retina 截图换算成鼠标逻辑坐标。把窗口移到主屏后操作。中文通过 Unicode 键盘事件输入，不修改剪贴板；个别应用可能忽略这些事件。插件不能绕过系统权限，受保护界面和安全输入框不保证可操作，并仍受宿主执行权限和用户任务授权约束。
+例如：“用 Codex 电脑控制打开计算器，计算 123 × 456，并核对结果。”应用名称在两个系统上可能不同；Windows 启动新应用时使用 `notepad.exe` 这样的可执行文件名或 `.exe` 完整路径，不接受脚本/URL 作为启动目标。
 
-## 暂停与卸载
-
-鼠标移到主屏左上角会触发键鼠紧急中止。双击 `codex-computer-control/stop.command`，阻止后续截图、键鼠操作和应用启动；已发出的短操作可能完成。恢复时运行 `codex-computer-control/resume.command`，并将鼠标移离左上角。
-
-```sh
-codex plugin remove codex-computer-control@codex-computer-control-local
-```
-
-卸载不会删除源码和 `~/.local/share/codex-computer-control/`，需要时自行清理。
-
-## 测试和更新
-
-安装后在仓库根目录运行：
-
-```sh
-~/.local/share/codex-computer-control/venv/bin/python -m unittest discover -s codex-computer-control/tests -v
-~/.local/share/codex-computer-control/venv/bin/python codex-computer-control/tests/check_protocol.py
-```
-
-单元测试使用模拟桌面，覆盖参数、暂停、Retina 坐标、Unicode 和异常时的键鼠释放。协议测试验证真实 MCP 初始化、工具发现和错误返回，不操作真实桌面。真实桌面操作需在授权的宿主中验证。修改源码后重新运行安装器，再重启宿主。
-
-可选完整本机流程测试（需要 Tkinter）：
-
-```sh
-~/.local/share/codex-computer-control/venv/bin/python codex-computer-control/tests/live_workflow.py
-```
-
-只操作自己创建的模拟聊天窗口，不联网、不向真实联系人发送消息，结束时关闭窗口。OCR 可能把 `I` 和 `l` 等相似字形混淆；严格断言会停止，需要局部细查，不能把失败当成功。
-
-可选只读截图基准（需要屏幕录制权限，不发送消息）：
-
-```sh
-~/.local/share/codex-computer-control/venv/bin/python codex-computer-control/tests/benchmark_capture.py
-```
-
-使用 `--baseline /path/to/old/server.py` 比较旧版；`--output` 指定结果文件。测试连接保持打开，第一帧单列为冷调用，其余帧计算中位数。
-
-## 文件结构
-
-```text
-README.md
-.gitignore
-install.command
-.agents/plugins/marketplace.json
-codex-computer-control/
-  .codex-plugin/plugin.json
-  .gitignore
-  server.py
-  install.py
-  install.command
-  requirements.txt
-  stop.command
-  resume.command
-  skills/computer-control/SKILL.md
-  tests/
-```
-
-## 上传到 GitHub
-
-将本文件所在文件夹的内容作为仓库根目录提交。建议用 Git 上传，确保隐藏的 `.agents`、`.codex-plugin` 和 `.gitignore` 也被包含：
-
-```sh
-git init -b main
-git add .
-git commit -m "Initial Codex Computer Control plugin"
-```
-
-在 GitHub 创建空仓库，再按页面说明添加远程地址并推送。本文件夹不包含虚拟环境、机器专属 MCP 配置、API 密钥或 Cloudflare 凭证。
-
-插件结构参考 [OpenAI 插件打包文档](https://developers.openai.com/plugins/build/plugins)，本机接入见 [MCP 文档](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)。此服务在 Mac 本机运行，不部署到 Cloudflare Workers。
-
-## 参数与返回值
-
-`desktop_step` 的 `actions` 必填，空列表用于观察，最多 32 项。下表中的坐标默认是主屏逻辑像素。
-
-| 参数 | 默认值 | 含义 |
-| --- | --- | --- |
-| `app` | 空 | 应用名；激活并在执行中检查前台应用 |
-| `profile` | `ultra` | `ultra` 512px / Q20；`fast` 768px / Q30；`detail` 不缩小 / Q85 |
-| `output` | `image` | `image` 返回图像；`text` 返回 AX/OCR；`none` 成功时省略观察 |
-| `view_id` | 空 | 使用先前截图的图片坐标；最多缓存 16 帧，120 秒过期 |
-| `crop` | 空 | `{x,y,width,height}`，主屏逻辑坐标裁剪区域 |
-| `include_text` | `false` | 图像模式同时提取可访问文本或 OCR |
-| `settle_ms` | `0` | 动作后等待 0–500 毫秒 |
-| `budget_ms` | `8000` | 动作预算 100–20000 毫秒；父进程硬期限最多 20 秒 |
-
-动作示例（JSON 工具参数，不是 shell 命令）：
+先观察（这是 MCP 工具参数 JSON，不是终端命令）：
 
 ```json
 {"app":"Calculator","actions":[],"profile":"detail","include_text":true}
 ```
 
-观察目标后再执行，例如输入计算式；应用名称必须能在本机解析：
+Windows 示例先观察记事本：
 
 ```json
-{"app":"Calculator","actions":[{"action":"press","key":"esc"},{"action":"type","text":"123*456"},{"action":"press","key":"enter"}],"profile":"detail"}
+{"app":"notepad.exe","actions":[],"profile":"detail","include_text":true}
 ```
 
-`click` 需要 `x/y`，可选 `button`、`clicks`（1–3）；`move` 需要 `x/y` 和可选 `duration`（0–1 秒）；`drag` 使用 `start_x/start_y/end_x/end_y` 和 `duration`（0.1–2 秒）。`scroll` 的 `clicks` 为 -100 到 100，可选 `horizontal`。`press` 使用 `key` 和 `presses`（1–50），`hotkey` 使用 1–6 个 `keys`。`type` 最多 10000 个字符。`wait` 的 `seconds` 为 0–1 秒，每批累计最多 2 秒。`click_text/assert_text` 使用 `text`、可选 `region` 和 `timeout_ms`（0–3000）。文本匹配忽略空白，需要唯一匹配，不是逐字节比较。
+确认目标应用、布局和输入位置后再发送动作。例如当前输入框已正确聚焦：
 
-返回 `completed/requested`、每步 `results`、`error`、耗时及可选截图/文本。`completed` 只统计完整返回的动作；失败动作仍可能部分生效。硬超时或执行进程退出会报告 `uncertain_action`，可能已经输入时写入 STOP。不能依据 `completed=0` 推断完全没有输入，也不能盲目重放。
+```json
+{"actions":[{"action":"type","text":"本地测试 / local test"}],"profile":"detail"}
+```
 
-## 常见问题
+消息发送任务必须先在聊天标题区域验证收件人，再在输入框区域验证完整草稿；侧栏联系人名字不代表当前收件人。失败后先检查 `completed`、`error`、`results` 和屏幕，不盲目重放。
 
-| 现象 | 处理 |
+## 参数
+
+| `desktop_step` 参数 | 默认 | 含义 |
+| --- | --- | --- |
+| `actions` | 必填 | 0–32 项；空列表用于观察 |
+| `app` | 无 | 激活目标并绑定前台进程；不填则绑定当前前台进程 |
+| `profile` | `ultra` | 512px / JPEG Q20；`fast` 768px/Q30；`detail` 原屏幕坐标分辨率/Q85 |
+| `output` | `image` | `image`、`text`、`none`；错误尽可能返回观察 |
+| `include_text` | `auto` | 自动附带 AX/UIA，不做 OCR；`true` 允许 OCR；`false` 关闭附加文字 |
+| `view_id` | 无 | 使用上一张图片的坐标，自动换算裁剪偏移和缩放 |
+| `crop` | 无 | `{x,y,width,height}`，始终使用屏幕坐标 |
+| `settle_ms` | `0` | 动作后等待 0–500 毫秒 |
+| `budget_ms` | `8000` | 动作预算 100–20000 毫秒；含观察的硬期限最多 20 秒 |
+
+支持动作：
+
+| 动作 | 参数 |
 | --- | --- |
-| 找不到 `codex` | 在安装了 Codex CLI 的终端运行，确认 `codex` 位于 PATH |
-| 找不到三个核心工具 | 安装器成功后重启宿主并开启新聊天；检查插件是否启用 |
-| 权限错误 | 手动开启辅助功能/屏幕录制；授权主体以系统提示为准 |
-| STOP 生效 | 先检查界面及部分执行结果，用户运行 `resume.command` 后才恢复 |
-| 前台改变或旧 `view_id` | 重新观察目标，使用新截图；不要重放已经执行的批次 |
-| OCR 找不到/多个目标 | 缩小区域并用 detail 图检查；遮挡、相似字形和应用 AX 支持均会影响结果 |
-| 锁屏或休眠 | 用户手动唤醒解锁，不支持绕过锁屏 |
-| 输入未生效 | 某些应用不接受进程定向 Unicode 事件；检查画面，避免重复发送 |
+| `click` | `x,y`；`button=left/right/middle`；`clicks=1..3` |
+| `move` | `x,y`；`duration=0..1` 秒 |
+| `drag` | `start_x,start_y,end_x,end_y`；`duration=0.1..2`；`button=left/right` |
+| `scroll` | `clicks=-100..100`；可选 `horizontal`，正数向上/右 |
+| `press` | `key`；`presses=1..50` |
+| `hotkey` | `keys` 数组，1–6 个键 |
+| `type` | `text`，最多 10000 个 UTF-16 单元；不修改剪贴板 |
+| `invoke` | `element_id`，执行已观察到的控件 |
+| `set_value` | `element_id,value`，设置支持写入的字段；需检查结果 |
+| `focus_element` | `element_id`，聚焦支持该能力的控件 |
+| `wait` | `seconds=0..1`，每批合计最多 2 秒 |
+| `click_text` / `assert_text` | `text`；可选 `region`、`timeout_ms=0..3000` |
 
-## 隐私、发布与维护
+控件 ID 来自观察结果，30 秒过期，最多缓存 512 项，绑定当前前台进程；以后端实际返回的 `actions` 能力为准。安全输入框和禁用控件不支持这些操作。`set_value` 不是键盘事件，部分应用可能不触发相同业务回调，必须验证。
 
-截图和提取的文本会进入当前宿主的模型会话；本地 OCR 不等于截图不会离开机器。服务本身使用 stdio，不监听网络端口，不需要额外 API 密钥。依赖安装需要网络；宿主自身的数据处理规则仍适用。源码没有自动上传屏幕或自动恢复急停的功能。
+文本匹配去除空白后要求唯一匹配；不是字节级比较。macOS 先读取 AX，未找到目标再用 Apple Vision；Windows 先读取 UI Automation，未找到目标再尝试 Windows OCR。Windows OCR 需要系统支持及已安装的识别语言，不可用时会明确报错。
 
-发布目录不包含 `.mcp.json`、虚拟环境、日志、截图、个人基准结果或凭证。请只上传本目录，勿把上一级工作目录作为仓库上传。安装后会生成本机 `.mcp.json`，Git 已忽略它；手动打 ZIP 时也必须排除。仓库未指定开源许可证，公开上传并不自动授予第三方开源使用权；发布者应自行选择许可证。
+常用键名：`enter/return`、`esc/escape`、`tab`、`space`、`backspace`、`delete`、方向键、`home/end/pageup/pagedown`、`a..z`、`0..9`、`f1..f12`。`command/cmd/meta` 在 Mac 为 Command，在 Windows 为 Windows 键；Windows 还支持 `win/windows/insert`，Mac 会在执行前拒绝这些名称。快捷键的物理字母键映射以常见键盘布局为准；Unicode 输入用于文字内容。
 
-BUG 检查范围、修复和剩余限制见 [BUG_AUDIT.md](BUG_AUDIT.md)。本次检查没有重新安装已启用的插件；要使用修复后的版本，请重新运行安装器。
+## 坐标、急停与期限
+
+仅支持主屏。macOS 是逻辑像素，Retina 图像会换算；Windows 使用启用 DPI 感知后的物理像素。二者数值不能直接复用。
+
+从缩略图定位时传回 `view_id`。OCR/控件表格坐标、`crop` 和 `region` 始终是屏幕坐标，不要混用。最多保留 16 个视图、120 秒过期；前台进程变化、屏幕尺寸变化或后端重启后需要重新观察。同一进程内部窗口/布局变化无法自动完全识别，仍需模型检查。
+
+鼠标移到主屏左上角，或运行 `codex-computer-control/stop.command`（Mac）/`stop.cmd`（Windows）即可阻止后续输入。STOP 也阻止截图和应用激活；状态查询仍可用。用户检查部分执行结果后，运行对应 `resume.command` / `resume.cmd` 才恢复。已经发出的事件可能完成。
+
+JS 会在硬期限终止挂起的后端。可能已输入时设置 STOP，返回 `uncertain_action`，不自动恢复和重放。正常异常会尝试释放按键/鼠标，但强制结束进程不能保证释放。Windows 的释放事件是系统输入释放；Mac 键盘发回原目标进程，鼠标通过会话事件通道释放。用户应检查是否有键鼠残留状态再继续。
+
+默认动作预算 8 秒、硬期限 10 秒，硬期限最多 20 秒。期限依赖主机进程被调度，不包含模型推理，也无法约束整机挂起。不能保证整个用户任务在 20 秒内完成。
+
+## 测试与发布
+
+开发环境在插件目录执行：
+
+```sh
+cd codex-computer-control
+npm ci --ignore-scripts
+npm test
+npm run build:native
+npm run check:protocol
+node tests/protocol.js --native-status
+```
+
+单元测试用模拟后端验证 JS 调度和真实子进程通信；协议测试验证真实 MCP 初始化、三个工具和非法动作拒绝。`--native-status` 只查询真实系统状态，不执行键鼠动作。Mac 可选运行 `node tests/live-macos.js`，它只操作自己创建的本地测试窗口并关闭，不发送网络消息。CI 分别配置 macOS 编译 Swift、Windows 编译 C# 和 PowerShell 语法检查。配置 CI 不代表它已在远程通过。
+
+性能原始数值见 [BENCHMARKS.md](BENCHMARKS.md)。返回结果提供 `native_calls` 分项耗时，可区分截图、控件读取和输入。
+
+本次本机验证和未验证范围见 [BUG_AUDIT.md](BUG_AUDIT.md)。macOS 的本地测试窗口验证范围见检查记录；Windows 未做真机验证。请勿据此宣称两端所有应用都已兼容。
+
+上传到 GitHub 时以本文件所在目录为仓库根目录，包含隐藏的 `.agents`、`.github`、`.codex-plugin` 和 `.gitignore`。不要上传 `node_modules`、`bin`、生成的 `.mcp.json`、本机截图或凭证。`package-lock.json` 应提交。
+
+```text
+.agents/plugins/marketplace.json
+.github/workflows/ci.yml
+README.md / README.en.md / ARCHITECTURE.md / BUG_AUDIT.md
+install.command / install.cmd
+codex-computer-control/
+  package.json / package-lock.json
+  .codex-plugin/plugin.json
+  src/                   # JS 主控、MCP、进程桥接、参数和系统识别
+  native/macos/          # Swift
+  native/windows/        # C# + Windows PowerShell
+  scripts/               # 安装、构建、测试和暂停/恢复
+  tests/
+  skills/computer-control/SKILL.md
+  stop.command / stop.cmd / resume.command / resume.cmd
+```
+
+服务没有网络监听端口；OCR 由本机系统执行。但返回的屏幕和文本会进入 Codex 模型会话，宿主的数据处理政策仍然适用。依赖安装需要联网。系统权限、安全桌面和 Windows UIPI 限制仍然适用，本项目不会绕过它们。
+
+卸载：
+
+```sh
+codex plugin remove codex-computer-control@codex-computer-control-local
+```
+
+卸载不删除发布源码、个人安装来源或备份目录。修改源码后需重新运行安装器，再重启 Codex。
