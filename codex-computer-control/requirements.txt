@@ -1,0 +1,6 @@
+mcp>=1.20,<2
+PyAutoGUI==0.9.54
+Pillow>=11,<13
+pyobjc-framework-Quartz>=11,<13
+pyobjc-framework-ApplicationServices>=11,<13
+pyobjc-framework-Vision>=11,<13
